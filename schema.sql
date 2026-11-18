@@ -1,0 +1,6 @@
+CREATE TABLE IF NOT EXISTS spatial_lessons (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  snapshot JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
