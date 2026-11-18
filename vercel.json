@@ -1,6 +1,16 @@
 {
-  "rewrites": [
-    { "source": "/TEST2.html", "destination": "/index.html" },
-    { "source": "/api/(.*)", "destination": "/api/index.mjs" }
+  "version": 2,
+  "builds": [
+    { "src": "api/index.mjs", "use": "@vercel/node" },
+    { "src": "*.html", "use": "@vercel/static" },
+    { "src": "*.css", "use": "@vercel/static" },
+    { "src": "*.mjs", "use": "@vercel/static" }
+  ],
+  "routes": [
+    { "src": "/server.mjs", "status": 404 },
+    { "src": "/api/(.*)", "dest": "/api/index.mjs" },
+    { "src": "/TEST2.html", "dest": "/index.html" },
+    { "src": "/", "dest": "/index.html" },
+    { "src": "/(.*)", "dest": "/$1" }
   ]
 }
