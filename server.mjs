@@ -34,7 +34,6 @@ async function readHtmlEntry() {
   }
 }
 
-// Explicit literal paths inside readFile(resolve(root, '...')) guarantee @vercel/nft bundles every asset.
 async function readStaticAsset(pathname) {
   switch (pathname) {
     case '/':
@@ -200,7 +199,6 @@ export async function createApp(options = {}) {
       const url = new URL(req.url || '/', 'http://localhost');
       const origin = req.headers.origin;
 
-      // Permit local HTML files, local previews, and same-host cloud deployments.
       if (!isAllowedOrigin(origin, req)) {
         return json(403, { error: 'Origin không được phép.' });
       }
@@ -286,7 +284,6 @@ export async function createApp(options = {}) {
         return json(405, { error: 'Phương thức không được hỗ trợ.' });
       }
 
-      // Allowlist avoids serving backups, credentials, database files, or server source code.
       const asset = await readStaticAsset(url.pathname);
       if (!asset) return json(404, { error: 'Không tìm thấy.' });
 
@@ -337,7 +334,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
           const entry = await fetch(url + '/TEST2.html', { signal: AbortSignal.timeout(1500) });
           sameStudio = entry.ok && Buffer.from(await entry.arrayBuffer()).equals(await readHtmlEntry());
         }
-      } catch { /* An occupied port is not necessarily an HTTP server. */ }
+      } catch {}
     }
     if (sameStudio) {
       console.log(`Geometry Studio đang chạy tại ${url}/TEST2.html`);
