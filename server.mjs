@@ -8,6 +8,16 @@ import { createHash, randomUUID } from 'node:crypto';
 const root = dirname(fileURLToPath(import.meta.url));
 const studioInstance = createHash('sha256').update(root).digest('hex');
 const idPattern = /^[a-zA-Z0-9_-]{1,100}$/;
+
+async function readHtmlEntry() {
+  try {
+    return await readFile(resolve(root, 'index.html'));
+  } catch (error) {
+    if (error.code === 'ENOENT') return await readFile(resolve(root, 'TEST2.html'));
+    throw error;
+  }
+}
+
 export function validateLesson(data) {
   if (typeof data?.title !== 'string' || !data.title.trim() || data.title.length > 255) {
     throw new Error('Tên giáo án phải có 1–255 ký tự.');
@@ -19,7 +29,19 @@ async function createStore(options) {
   if (options.databaseUrl) {
     const { default: pg } = await import('pg');
     const pool = new pg.Pool({ connectionString: options.databaseUrl });
-    await pool.query(await readFile(resolve(root, 'schema.sql'), 'utf8'));
+    let schema;
+    try {
+      schema = await readFile(resolve(root, 'schema.sql'), 'utf8');
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      schema = `CREATE TABLE IF NOT EXISTS spatial_lessons (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        snapshot JSONB NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );`;
+    }
+    await pool.query(schema);
     return {
       kind: 'postgresql',
       async list() { return (await pool.query('SELECT snapshot FROM spatial_lessons ORDER BY created_at DESC')).rows.map(r => r.snapshot); },
@@ -56,18 +78,22 @@ async function createStore(options) {
 
 export async function createApp(options = {}) {
   const store = await createStore(options);
-  const server = http.createServer(async (req, res) => {
+  const handleRequest = async (req, res) => {
     const json = (status, body) => {
       res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
       res.end(status === 204 ? undefined : JSON.stringify(body));
     };
     try {
-      const url = new URL(req.url, 'http://localhost');
+      const url = new URL(req.url || '/', 'http://localhost');
       const origin = req.headers.origin;
-      // This server is local by default. Permit the local HTML file and local previews.
+      // This server is local by default. Permit the local HTML file, local previews, and same-host deployments.
       if (origin && origin !== 'null') {
         let local = false;
-        try { local = ['localhost', '127.0.0.1', '[::1]'].includes(new URL(origin).hostname); } catch {}
+        try {
+          const parsed = new URL(origin);
+          const currentHost = (req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
+          local = ['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname) || Boolean(currentHost && parsed.host === currentHost);
+        } catch {}
         if (!local) return json(403, { error: 'Origin không được phép.' });
       }
       if (origin) {
@@ -85,15 +111,26 @@ export async function createApp(options = {}) {
         if (req.method === 'GET') return json(200, { lessons: await store.list(), storage: store.kind });
         if (req.method !== 'POST') return json(405, { error: 'Phương thức không được hỗ trợ.' });
         if (!req.headers['content-type']?.startsWith('application/json')) return json(415, { error: 'Yêu cầu Content-Type: application/json.' });
-        let size = 0;
-        const chunks = [];
-        for await (const chunk of req) {
-          size += chunk.length;
-          if (size > 1024 * 1024) return json(413, { error: 'Giáo án vượt quá 1 MB.' });
-          chunks.push(chunk);
+        let rawBody = null;
+        if (req.body !== undefined && req.body !== null && (req.readableEnded || req.complete)) {
+          rawBody = typeof req.body === 'string'
+            ? req.body
+            : Buffer.isBuffer(req.body)
+              ? req.body.toString('utf8')
+              : JSON.stringify(req.body);
+          if (Buffer.byteLength(rawBody, 'utf8') > 1024 * 1024) return json(413, { error: 'Giáo án vượt quá 1 MB.' });
+        } else {
+          let size = 0;
+          const chunks = [];
+          for await (const chunk of req) {
+            size += chunk.length;
+            if (size > 1024 * 1024) return json(413, { error: 'Giáo án vượt quá 1 MB.' });
+            chunks.push(chunk);
+          }
+          rawBody = Buffer.concat(chunks).toString('utf8');
         }
         let lesson;
-        try { lesson = validateLesson(JSON.parse(Buffer.concat(chunks).toString('utf8'))); }
+        try { lesson = validateLesson(JSON.parse(rawBody)); }
         catch (error) { return json(400, { error: error.message }); }
         lesson.id = idPattern.test(lesson.id || '') ? lesson.id : 'lesson-' + randomUUID();
         lesson.createdAt = new Date().toISOString();
@@ -109,30 +146,32 @@ export async function createApp(options = {}) {
       if (req.method !== 'GET' && req.method !== 'HEAD') return json(405, { error: 'Phương thức không được hỗ trợ.' });
       // Allowlist avoids serving backups, credentials, database files, or source code.
       const staticFiles = {
-        '/': ['TEST2.html', 'text/html; charset=utf-8'],
-        '/TEST2.html': ['TEST2.html', 'text/html; charset=utf-8'],
-        '/geometry-math.mjs': ['geometry-math.mjs', 'text/javascript; charset=utf-8'],
-        '/geometry-model.mjs': ['geometry-model.mjs', 'text/javascript; charset=utf-8'],
-        '/geometry-snapshot.mjs': ['geometry-snapshot.mjs', 'text/javascript; charset=utf-8'],
-        '/geometry-scene.mjs': ['geometry-scene.mjs', 'text/javascript; charset=utf-8'],
-        '/tracking-runtime.mjs': ['tracking-runtime.mjs', 'text/javascript; charset=utf-8'],
-        '/geometry-sections.mjs': ['geometry-sections.mjs', 'text/javascript; charset=utf-8'],
-        '/geometry-properties.mjs': ['geometry-properties.mjs', 'text/javascript; charset=utf-8'],
-        '/geometry-properties-panel.mjs': ['geometry-properties-panel.mjs', 'text/javascript; charset=utf-8'],
-        '/studio-ui.mjs': ['studio-ui.mjs', 'text/javascript; charset=utf-8'],
-        '/studio-ui.css': ['studio-ui.css', 'text/css; charset=utf-8']
+        '/': [null, 'text/html; charset=utf-8'],
+        '/index.html': [null, 'text/html; charset=utf-8'],
+        '/TEST2.html': [null, 'text/html; charset=utf-8'],
+        '/geometry-math.mjs': [resolve(root, 'geometry-math.mjs'), 'text/javascript; charset=utf-8'],
+        '/geometry-model.mjs': [resolve(root, 'geometry-model.mjs'), 'text/javascript; charset=utf-8'],
+        '/geometry-snapshot.mjs': [resolve(root, 'geometry-snapshot.mjs'), 'text/javascript; charset=utf-8'],
+        '/geometry-scene.mjs': [resolve(root, 'geometry-scene.mjs'), 'text/javascript; charset=utf-8'],
+        '/tracking-runtime.mjs': [resolve(root, 'tracking-runtime.mjs'), 'text/javascript; charset=utf-8'],
+        '/geometry-sections.mjs': [resolve(root, 'geometry-sections.mjs'), 'text/javascript; charset=utf-8'],
+        '/geometry-properties.mjs': [resolve(root, 'geometry-properties.mjs'), 'text/javascript; charset=utf-8'],
+        '/geometry-properties-panel.mjs': [resolve(root, 'geometry-properties-panel.mjs'), 'text/javascript; charset=utf-8'],
+        '/studio-ui.mjs': [resolve(root, 'studio-ui.mjs'), 'text/javascript; charset=utf-8'],
+        '/studio-ui.css': [resolve(root, 'studio-ui.css'), 'text/css; charset=utf-8']
       };
       const file = Object.hasOwn(staticFiles, url.pathname) ? staticFiles[url.pathname] : null;
       if (!file) return json(404, { error: 'Không tìm thấy.' });
-      const content = await readFile(resolve(root, file[0]));
+      const content = file[0] ? await readFile(file[0]) : await readHtmlEntry();
       res.writeHead(200, { 'Content-Type': file[1], 'Content-Length': content.length, 'Cache-Control': 'no-cache', 'X-Content-Type-Options': 'nosniff' });
       res.end(req.method === 'HEAD' ? undefined : content);
     } catch (error) {
       console.error('Request failed:', error.message);
       json(error.status || (error.code === '23505' ? 409 : 500), { error: error.status === 409 || error.code === '23505' ? 'ID giáo án đã tồn tại.' : 'Không thể hoàn tất yêu cầu lưu trữ.' });
     }
-  });
-  return { server, store };
+  };
+  const server = http.createServer(handleRequest);
+  return { server, store, handleRequest };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
@@ -157,7 +196,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
         // An older running copy serves the same files but has no instance header.
         if (health.ok && !instance && (await health.json()).status === 'ok') {
           const entry = await fetch(url + '/TEST2.html', { signal: AbortSignal.timeout(1500) });
-          sameStudio = entry.ok && Buffer.from(await entry.arrayBuffer()).equals(await readFile(resolve(root, 'TEST2.html')));
+          sameStudio = entry.ok && Buffer.from(await entry.arrayBuffer()).equals(await readHtmlEntry());
         }
       } catch { /* An occupied port is not necessarily an HTTP server. */ }
     }
@@ -171,4 +210,20 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   const stop = () => server.close(async () => { await store.close(); process.exit(0); });
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
+}
+
+let vercelAppPromise = null;
+export default async function handler(req, res) {
+  if (!vercelAppPromise) {
+    const defaultDataFile = process.env.VERCEL ? '/tmp/lessons.json' : resolve(root, 'data', 'lessons.json');
+    vercelAppPromise = createApp({
+      databaseUrl: process.env.DATABASE_URL,
+      dataFile: process.env.LESSON_DATA_FILE || defaultDataFile
+    }).catch(error => {
+      vercelAppPromise = null;
+      throw error;
+    });
+  }
+  const { handleRequest } = await vercelAppPromise;
+  await handleRequest(req, res);
 }
