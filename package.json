@@ -1,0 +1,19 @@
+{
+  "name": "webar-geometry-studio",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test qa/regression.test.mjs qa/interaction.test.mjs qa/selection.test.mjs qa/connection.test.mjs qa/hand-intent.test.mjs qa/tracking-quality.test.mjs qa/editor.test.mjs qa/visibility.test.mjs qa/studio.test.mjs qa/server.test.mjs",
+    "test:browser": "node qa/smoke.mjs",
+    "test:model": "node --test qa/baseline.test.mjs qa/geometry-model.test.mjs",
+    "test:tracking": "node --test qa/tracking-runtime.test.mjs qa/tracking-quality.test.mjs qa/hand-intent.test.mjs",
+    "test:spatial": "node --test qa/spatial-linear.test.mjs",
+    "test:sections": "node --test qa/solid-sections.test.mjs",
+    "test:ui": "node --test qa/studio-ui.test.mjs qa/canvas-render.test.mjs qa/mouse-workspace.test.mjs",
+    "test:ui:browser": "node qa/studio-ui-browser-checks.mjs"
+  },
+  "optionalDependencies": { "pg": "^8.16.3" },
+  "engines": { "node": ">=20" }
+}
